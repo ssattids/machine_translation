@@ -38,7 +38,6 @@ print(train_de_indices[1])
 print(len(en_vocab))
 print(len(de_vocab))
 
-
 class AttentionTrain(nn.Module):
   def __init__(self, hidden_size):
     super(AttentionTrain, self).__init__()
@@ -200,7 +199,6 @@ def train(lang_dataset, params, encoder, decoder):
     
     ground_truth_prob = params['ground_truth_prob']
     print("Ready for first epoch")
-    
     for epoch in range(params['epochs']):
         ep_loss = 0.
         start_time = time.time()
@@ -233,9 +231,8 @@ def train(lang_dataset, params, encoder, decoder):
             optim_decoder.step()
             optim_decoder.zero_grad()
             ep_loss += loss
-
-        print('epoch: %d, loss: %0.2f, time: %0.2f sec' %\
-              (epoch, ep_loss, time.time()-start_time ))
+        with open("loss.txt", "a+") as l:
+            l.write("Epoch: " + str(epoch) + " Loss: " + str(ep_loss) + " time: " + str(time.time()-start_time) + "\n")
         
         torch.save(encoder.state_dict(), './models/encoder_' + str(epoch) + '.pt')
         torch.save(decoder.state_dict(), './models/decoder_' + str(epoch) + '.pt')
