@@ -7,14 +7,13 @@ import torch.nn.functional as F
 import numpy as np
 import random
 import time
+import pickle
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-import pickle
-
 print("Start!")
 def get_file(file_name):
-  return pickle.load(open('data/' + file_name, 'rb'))
+    return pickle.load(open('data/' + file_name, 'rb'))
 
 print("load vocab")
 en_vocab = get_file('en_vocab.pkl')
@@ -37,6 +36,34 @@ print(train_en_indices[1])
 print(train_de_indices[1])
 print(len(en_vocab))
 print(len(de_vocab))
+
+##note: train here is only 50 example! do not forget to change this
+#train_en_indices = train_en_indices[0:50]
+#train_de_indices = train_de_indices[0:50]
+
+
+def create_vocab_dicts(data, prev_vocab):
+  vocab = {}
+  vocab["CLS"] = 0
+  vocab["SEP"] = 1
+  vocab["PAD"] = 2
+  vocab["UNK"] = 3
+  words = []
+  for sentence in data:
+    for i in sentence:
+      if prev_vocab[int(i)] not in vocab:
+        vocab[prev_vocab[int(i)]] = len(vocab)
+  return vocab
+
+#en_vocab = create_vocab_dicts(train_en_indices, rev_en_vocab)
+#de_vocab = create_vocab_dicts(train_de_indices, rev_de_vocab)
+
+#print(en_vocab)
+#print(de_vocab)
+
+# Create reverse vocab dictionaries:
+#rev_en_vocab = {v: k for k, v in en_vocab.items()}
+#rev_de_vocab = {v: k for k, v in de_vocab.items()}
 
 class AttentionTrain(nn.Module):
   def __init__(self, hidden_size):
@@ -148,7 +175,7 @@ class DecoderAttention(nn.Module):
         # Unsqueezing an extra dimension to match the input for the next iteration
         next_word_idx = next_word_idx.unsqueeze(1)
         if i > max_sentence_len-2:
-          print("Sentence is too long:", i)
+          #print("Sentence is too long:", i)
           break
         i+=1
       return scores
@@ -161,7 +188,7 @@ class DecoderAttention(nn.Module):
     
       scores = self.linear(attn_output)
       return scores
-print("Endoder Decoder created")
+
 from torch.utils.data import Dataset, DataLoader
 
 class LangDataset(Dataset):
@@ -183,22 +210,20 @@ class LangDataset(Dataset):
 
     def __getitem__(self, idx):
         return self.source_sentences[idx], self.target_sentences[idx]
-print("Dataloader created")
+
 def train(lang_dataset, params, encoder, decoder):
     
     # since the second index corresponds to the PAD token, we just ignore it
     # when computing the loss
-    print("Setting cross entropy loss")
     criterion = nn.CrossEntropyLoss(ignore_index=2)
-    print("Creating optimizers")
+    
     optim_encoder = optim.Adam(encoder.parameters(), lr=params['learning_rate'])
     optim_decoder = optim.Adam(decoder.parameters(), lr=params['learning_rate'])
     
-    print("Creating dataloader")
-    dataloader = DataLoader(lang_dataset, batch_size=200, shuffle=True, num_workers=0)
+    dataloader = DataLoader(lang_dataset, batch_size=10, shuffle=True, num_workers=0)
     
     ground_truth_prob = params['ground_truth_prob']
-    print("Ready for first epoch")
+    
     for epoch in range(params['epochs']):
         ep_loss = 0.
         start_time = time.time()
@@ -231,26 +256,25 @@ def train(lang_dataset, params, encoder, decoder):
             optim_decoder.step()
             optim_decoder.zero_grad()
             ep_loss += loss
+
         with open("loss.txt", "a+") as l:
             l.write("Epoch: " + str(epoch) + " Loss: " + str(ep_loss) + " time: " + str(time.time()-start_time) + "\n")
-        
+                
         torch.save(encoder.state_dict(), './models/encoder_' + str(epoch) + '.pt')
         torch.save(decoder.state_dict(), './models/decoder_' + str(epoch) + '.pt')
-    return encoder, decoder
-print("Train created")
+
 params = {}
 params['vocab_size'] = len(en_vocab)
-params['batch_size'] = 10
+params['batch_size'] = 150
 params['epochs'] = 50
-params['learning_rate'] = 0.000001
+params['learning_rate'] = 1e-5
 params['ground_truth_prob'] = 1
 params['prob_decay_rate'] = 1
-hidden_size = 256
+hidden_size = 512
 
-encoder = EncoderAttention(len(de_vocab), hidden_size)
-decoder = DecoderAttention(len(en_vocab), hidden_size)
+encoder = EncoderAttention(int(torch.max(train_de_indices)) + 1, hidden_size)
+decoder = DecoderAttention(int(torch.max(train_en_indices)) + 1, hidden_size)
 
 lang_dataset = LangDataset(train_de_indices.long().to(device), train_en_indices.long().to(device))
 print("ready to train")
-encoder_trained, decoder_trained = train(lang_dataset, params, encoder.to(device), decoder.to(device))
-
+train(lang_dataset, params, encoder.to(device), decoder.to(device))
