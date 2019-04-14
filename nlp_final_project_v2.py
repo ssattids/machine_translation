@@ -220,7 +220,7 @@ def train(lang_dataset, params, encoder, decoder):
     optim_encoder = optim.Adam(encoder.parameters(), lr=params['learning_rate'])
     optim_decoder = optim.Adam(decoder.parameters(), lr=params['learning_rate'])
     
-    dataloader = DataLoader(lang_dataset, batch_size=10, shuffle=True, num_workers=0)
+    dataloader = DataLoader(lang_dataset, batch_size=params['batch_size'], shuffle=True, num_workers=0)
     
     ground_truth_prob = params['ground_truth_prob']
     
@@ -249,7 +249,7 @@ def train(lang_dataset, params, encoder, decoder):
             # print(preds.size()[2])
             targets = targets[:,0:preds.size()[2]]
             loss = criterion(preds, targets)
-            
+            loss /= params['batch_size']
             loss.backward()
             optim_encoder.step()
             optim_encoder.zero_grad()
