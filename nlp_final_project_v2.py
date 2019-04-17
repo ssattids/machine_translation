@@ -37,9 +37,9 @@ print(train_de_indices[1])
 print(len(en_vocab))
 print(len(de_vocab))
 
-##note: train here is only 50 example! do not forget to change this
-#train_en_indices = train_en_indices[0:50]
-#train_de_indices = train_de_indices[0:50]
+#note: train here is only 50 example! do not forget to change this
+#train_en_indices = train_en_indices[0:10000]
+#train_de_indices = train_de_indices[0:10000]
 
 
 def create_vocab_dicts(data, prev_vocab):
@@ -260,20 +260,20 @@ def train(lang_dataset, params, encoder, decoder):
         with open("loss.txt", "a+") as l:
             l.write("Epoch: " + str(epoch) + " Loss: " + str(ep_loss) + " time: " + str(time.time()-start_time) + "\n")
                 
-        torch.save(encoder.state_dict(), './models/encoder_' + str(epoch) + '.pt')
-        torch.save(decoder.state_dict(), './models/decoder_' + str(epoch) + '.pt')
+        torch.save(encoder.state_dict(), './models/encoder_' + str(params['hidden_size']) + '_' + str(epoch) + '.pt')
+        torch.save(decoder.state_dict(), './models/decoder_' + str(params['hidden_size']) + '_' + str(epoch) + '.pt')
 
 params = {}
 params['vocab_size'] = len(en_vocab)
 params['batch_size'] = 150
 params['epochs'] = 50
-params['learning_rate'] = 1e-5
+params['learning_rate'] = 1e-2
 params['ground_truth_prob'] = 1
 params['prob_decay_rate'] = 1
-hidden_size = 512
+params['hidden_size'] = 512
 
-encoder = EncoderAttention(int(torch.max(train_de_indices)) + 1, hidden_size)
-decoder = DecoderAttention(int(torch.max(train_en_indices)) + 1, hidden_size)
+encoder = EncoderAttention(int(torch.max(train_de_indices)) + 1, params['hidden_size'])
+decoder = DecoderAttention(int(torch.max(train_en_indices)) + 1, params['hidden_size'])
 
 lang_dataset = LangDataset(train_de_indices.long().to(device), train_en_indices.long().to(device))
 print("ready to train")
