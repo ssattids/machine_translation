@@ -114,17 +114,20 @@ class PosEncoder(nn.Module):
         self.max_seq_len = max_seq_len
         self.d_emb = d_emb
         
-        PE = nn.Parameter(torch.zeros(max_seq_len, d_emb))
+        self.dropout = nn.Dropout(p=0.1)
+        
+        PE = nn.Parameter(torch.zeros(max_seq_len, d_emb))#.to(device)
         for pos in range(0, max_seq_len):
             for i in range(0, int(d_emb/2)):
                 PE[pos, 2*i] = math.sin(pos/(10000**(2*i/d_emb)))
                 PE[pos, 2*i+1] = math.cos(pos/(10000**(2*i/d_emb)))
-        self.PE = nn.Parameter(PE.repeat(bsz, 1, 1))
+        self.PE = nn.Parameter(PE.repeat(bsz, 1, 1))#.to(device)  # duplicate it by bsz rows
+
     def forward(self, embs):
         seq_len = embs.size(1)
         bsz = embs.size(0)
         new_embs = embs + self.PE[:bsz, :seq_len, :]
-        return new_embs
+        return self.dropout(new_embs)
 
 class SelfAttention(nn.Module):
     def __init__(self, d_emb, d_k):
@@ -173,7 +176,6 @@ class SelfAttention(nn.Module):
         return z
       
   
-  
 class MultiheadAttention(nn.Module):
     def __init__(self, num_heads, d_emb, d_k):
         super(MultiheadAttention, self).__init__()
@@ -184,8 +186,9 @@ class MultiheadAttention(nn.Module):
         self.attns = nn.ModuleList()
         for _ in range(num_heads):
             self.attns.append(SelfAttention(d_emb, d_k))
-          
+        
         self.W0 = nn.Linear(d_k*num_heads, d_emb)#.to(device)
+        self.dropout = nn.Dropout(p=0.1)
         
     def forward(self, embs, de_lens):
         z = None
@@ -197,16 +200,20 @@ class MultiheadAttention(nn.Module):
                 z = torch.cat((z, inter), dim=2)
         z_new = self.W0(z)
 #         print("W0W0W0",float(torch.sum(self.W0.weight)))
-        return z_new
+        return self.dropout(z_new)  
 
 class Add_Norm(nn.Module):
-    def __init__(self):
+    def __init__(self, features=400, eps=1e-6):
         super(Add_Norm, self).__init__()
-        
-    def forward(self, x, original_x):
-        new_x = x + original_x # residual connection
-        norm_x = (new_x - new_x.mean(dim=-1, keepdim=True)) / new_x.std(dim=-1, keepdim=True) # layer normalization
-        return norm_x
+        self.alpha = nn.Parameter(torch.ones(features))
+        self.beta = nn.Parameter(torch.zeros(features))
+        self.eps = eps
+    
+
+    def forward(self, x):
+        mean = x.mean(-1, keepdim=True)
+        std = x.std(-1, keepdim=True)
+        return self.alpha * (x - mean) / (std + self.eps) + self.beta
 
 class FeedForward(nn.Module):
     def __init__(self, d_emb, d_ff, dropout):
@@ -217,10 +224,11 @@ class FeedForward(nn.Module):
         self.linear2 = nn.Linear(d_ff, d_emb)#.to(device)
         
     def forward(self, x):
-        x = self.dropout(x)
         x = self.linear1(x)
         x = self.relu(x)
+        x = self.dropout(x)
         x = self.linear2(x)
+        x = self.dropout(x)
         return x
 
 class EncoderLayer(nn.Module):
@@ -234,42 +242,36 @@ class EncoderLayer(nn.Module):
         
         
     def forward(self, embs, de_lens):
-        z = self.multi_attn(embs, de_lens)
-        z_norm = self.add_norm(z, embs)
-        z = self.ff(z_norm)
-#         z = self.add_norm(z, z_norm)  # or 
-        z = self.add_norm(z, embs)
-        return z
+        z1 = self.add_norm(embs)
+        z1 = self.multi_attn(z1, de_lens)
+        
+        z2 = self.add_norm(z1 + embs)
+        z2 = self.ff(z2)
+        return z1 + z2
 
 class TransformerEncoder(nn.Module):
     def __init__(self, bsz, num_layers, num_heads, max_seq_len, vocab_size, d_emb, d_k, d_ff, dropout):
         super(TransformerEncoder, self).__init__()
         self.num_layers = num_layers
         self.num_heads = num_heads
-        emb_w = torch.Tensor(vocab_size, d_emb)
-        stdv = 1. / math.sqrt(emb_w.size(1)) # like in nn.Linear
-        emb_w.uniform_(-stdv, stdv)
-    
-        self.embeddings = nn.Embedding(vocab_size, d_emb, _weight=emb_w)#.to(device)
+        
+        self.embeddings = nn.Embedding(vocab_size, d_emb)#.to(device)
         self.pos_en = PosEncoder(bsz, max_seq_len, d_emb)
-        self.layers = []
-
         
         self.layers = nn.ModuleList()
         for _ in range(num_layers):
-            self.layers.append(EncoderLayer(num_heads, vocab_size, d_emb, d_k, d_ff, dropout))        
-  
-#         self.layers = {}
-#         for i in range(num_layers):
-#             self.layers[i] = EncoderLayer(num_heads, vocab_size, d_emb, d_k, d_ff, dropout)
-        
+            self.layers.append(EncoderLayer(num_heads, vocab_size, d_emb, d_k, d_ff, dropout))
+            
+        self.add_norm = Add_Norm()
+
     def forward(self, indices, de_lens):
         embs = self.embeddings(indices)
         #print(embs.size())
         embs = self.pos_en(embs)
         for i in range(self.num_layers):
             embs = self.layers[i](embs, de_lens)
-        return embs
+        return self.add_norm(embs)
+
 
 class AttentionTrain(nn.Module):
   def __init__(self, hidden_size):
@@ -391,11 +393,7 @@ class DecoderAttention3(nn.Module):
     self.num_layers = num_layers
     self.hidden_size = hidden_size
 
-    emb_w = torch.Tensor(vocab_size, hidden_size)
-    stdv = 1. / math.sqrt(emb_w.size(1)) # like in nn.Linear
-    emb_w.uniform_(-stdv, stdv)
-    
-    self.embeddings = nn.Embedding(vocab_size, hidden_size, _weight=emb_w)
+    self.embeddings = nn.Embedding(vocab_size, hidden_size)
     self.dec_layers_train = nn.ModuleList([Dec_Att_Layer_train(vocab_size, hidden_size) for _ in range(num_layers)])
 #     self.dec_layers_train = {}
 #     self.dec_layers_eval = {}
@@ -405,7 +403,7 @@ class DecoderAttention3(nn.Module):
     self.dec_layers_eval = nn.ModuleList([Dec_Att_Layer_eval(vocab_size, hidden_size) for _ in range(num_layers)])
     self.linear = nn.Linear(hidden_size, vocab_size, bias=True)
     
-    self.linear.weight = self.embeddings.weight
+    #self.linear.weight = self.embeddings.weight
     
     self.binomial = torch.distributions.binomial.Binomial(total_count=1, probs=teacher_forcing_prob)
     
@@ -508,8 +506,8 @@ def train(lang_dataset, params, encoder, decoder):
     # when computing the loss
     criterion = nn.CrossEntropyLoss(ignore_index=2)
     
-    optim_encoder = optim.Adam(encoder.parameters(), lr=params['learning_rate'], weight_decay=1e-7)
-    optim_decoder = optim.Adam(decoder.parameters(), lr=params['learning_rate'], weight_decay=1e-7)
+    optim_encoder = optim.Adam(encoder.parameters(), lr=params['learning_rate'])
+    optim_decoder = optim.Adam(decoder.parameters(), lr=params['learning_rate'])
     
 #     print(list(encoder.parameters()))
     
@@ -575,21 +573,21 @@ def train(lang_dataset, params, encoder, decoder):
               (epoch, ep_loss, time.time()-start_time ))
 
 params = {}
-params['batch_size'] = 20
+params['batch_size'] = 100 
 params['epochs'] = 70
 params['learning_rate'] = 0.001
 params['hidden_size'] = 400
 
-params['num_layers'] = 1
+params['num_layers'] = 2
 params['num_layers_dec'] = 1
-params['num_heads'] = 1
+params['num_heads'] = 3
 params['max_seq_len'] = 1000
 
 params['keys_dim'] = 64
 params['feed_forward_dim'] = 2048
 params['dropout'] = 0.1
 
-params['teacher_forcing_prob'] = 0.3
+params['teacher_forcing_prob'] = 0
 
 # encoder = Encoder(len(de_vocab), hidden_size)
 # decoder = Decoder(len(en_vocab), hidden_size)
